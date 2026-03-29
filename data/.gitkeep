@@ -1,0 +1,2 @@
+# This file only exists so Git tracks the empty `data/` directory.
+# At runtime, `app/tracing.py` creates `data/traces.json` (gitignored). See PROJECT_WALKTHROUGH.md.

@@ -1,0 +1,25 @@
+# PEP 621 project metadata + dependency list (optional packaging).
+# Day-to-day local run: pip install -r requirements.txt && uvicorn app.main:app
+# See PROJECT_WALKTHROUGH.md for how this relates to requirements.txt.
+
+[project]
+name = "recipe-chatbot"
+version = "0.1.0"
+description = "Recipe evaluation chatbot with configurable agent behavior and JSON tracing"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "jinja2>=3.1.4",
+    "python-dotenv>=1.0.1",
+    "pydantic-settings>=2.6.0",
+    "openai>=1.57.0",
+]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

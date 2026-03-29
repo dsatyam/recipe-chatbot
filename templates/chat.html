@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<!--
+  templates/chat.html — browser UI for the chatbot.
+
+  How it connects to the backend:
+    - Rendered by FastAPI + Jinja2 from app/main.py route GET "/".
+    - {{ default_model }}, behavior_preview, and behavior_file_rel come from app/main.py.
+    - JavaScript calls POST /api/chat with JSON { session_id, message } — same contract as
+      app/schemas.py (ChatRequest). Multi-turn context for this tab uses server-side history
+      in data/traces.json (see app/tracing.py + app/chat.py "message" mode).
+
+  Session storage:
+    - sessionStorage key recipe_chatbot_session_id keeps one conversation per browser tab.
+    - "New conversation" clears storage and the on-screen log; the next send mints a new id.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Recipe chatbot</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f1419;
+      --bg-gradient-mid: #152028;
+      --panel: #1a2332;
+      --card: #161f2c;
+      --text: #e7ecf3;
+      --muted: #8b98a5;
+      --accent: #3d8bfd;
+      --accent-hover: #5c9dff;
+      --error: #f4212e;
+      --shadow: 0 24px 48px rgba(0, 0, 0, 0.35);
+      --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.2);
+      --radius-lg: 18px;
+      --radius-md: 12px;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #e8edf4;
+        --bg-gradient-mid: #dce4ef;
+        --panel: #ffffff;
+        --card: #ffffff;
+        --text: #0f1419;
+        --muted: #536471;
+        --accent: #1d9bf0;
+        --accent-hover: #0d8bd9;
+        --error: #d1242f;
+        --shadow: 0 20px 40px rgba(15, 20, 25, 0.08);
+        --shadow-soft: 0 6px 20px rgba(15, 20, 25, 0.06);
+      }
+    }
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      background: radial-gradient(1200px 600px at 10% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent),
+                  radial-gradient(900px 500px at 90% 100%, color-mix(in srgb, var(--accent) 12%, transparent), transparent),
+                  linear-gradient(165deg, var(--bg) 0%, var(--bg-gradient-mid) 45%, var(--bg) 100%);
+    }
+
+    .page-wrap {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 0.75rem 0.75rem 0;
+    }
+
+    .app-card {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--card);
+      border-radius: var(--radius-lg);
+      border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    header.app-header {
+      flex-shrink: 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1rem;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 100%, transparent) 0%, color-mix(in srgb, var(--card) 100%, transparent) 100%);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      min-width: 0;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      background: linear-gradient(145deg, #ffb347 0%, #ff8f5a 45%, #e86a2e 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .brand-icon .food-emoji {
+      font-size: 1.55rem;
+      line-height: 1;
+      display: block;
+      user-select: none;
+    }
+
+    .brand-text h1 {
+      margin: 0;
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+
+    header.app-header .btn-secondary {
+      margin-left: auto;
+      padding: 0.5rem 1rem;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+      background: color-mix(in srgb, var(--text) 4%, transparent);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      transition: border-color 0.15s, background 0.15s, color 0.15s;
+    }
+
+    header.app-header .btn-secondary:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+    }
+
+    header.app-header .btn-secondary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    main.chat-main {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+    }
+
+    #log {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      padding: 1rem 1.25rem;
+      scroll-behavior: smooth;
+    }
+
+    .msg-row {
+      display: flex;
+      gap: 0.65rem;
+      align-items: flex-start;
+      max-width: 100%;
+    }
+
+    .msg-row.user {
+      flex-direction: row-reverse;
+    }
+
+    .msg-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .msg-row.user .msg-avatar {
+      background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+      color: var(--accent);
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+
+    .msg-row.assistant .msg-avatar,
+    .msg-row.error .msg-avatar {
+      background: color-mix(in srgb, var(--text) 8%, var(--panel));
+      color: var(--muted);
+      border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+    }
+
+    .msg-row.error .msg-avatar {
+      color: var(--error);
+      border-color: color-mix(in srgb, var(--error) 30%, transparent);
+    }
+
+    .msg-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      min-width: 0;
+      max-width: calc(100% - 40px);
+    }
+
+    .msg-row.user .msg-stack {
+      align-items: flex-end;
+    }
+
+    .msg-meta {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    .msg-row.user .msg-meta {
+      flex-direction: row-reverse;
+    }
+
+    .msg-meta .role-label {
+      font-weight: 700;
+      color: color-mix(in srgb, var(--text) 75%, var(--muted));
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .bubble {
+      padding: 0.7rem 0.95rem;
+      border-radius: var(--radius-md);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .msg-row.user .bubble {
+      background: linear-gradient(165deg, color-mix(in srgb, var(--accent) 26%, var(--panel)), color-mix(in srgb, var(--accent) 18%, var(--panel)));
+      border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+    }
+
+    .msg-row.assistant .bubble {
+      background: var(--panel);
+      border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+    }
+
+    .msg-row.error .bubble {
+      border-color: var(--error);
+      color: var(--error);
+      background: color-mix(in srgb, var(--error) 10%, var(--panel));
+    }
+
+    .card-footer {
+      flex-shrink: 0;
+      padding: 0.75rem 1.25rem 0.9rem;
+      border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+      background: color-mix(in srgb, var(--text) 3%, var(--card));
+    }
+
+    .footer-inner {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      align-items: stretch;
+      max-width: 100%;
+    }
+
+    .footer-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      justify-content: center;
+    }
+
+    .pill {
+      font-size: 0.68rem;
+      color: var(--muted);
+      padding: 0.25rem 0.55rem;
+      border-radius: 999px;
+      border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+      background: color-mix(in srgb, var(--text) 4%, transparent);
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pill.behavior-path {
+      white-space: normal;
+      text-align: center;
+      line-height: 1.35;
+    }
+
+    .footer-behavior-detail {
+      font-size: 0.78rem;
+      color: color-mix(in srgb, var(--text) 72%, var(--muted));
+      line-height: 1.5;
+      margin: 0;
+      text-align: center;
+      padding: 0 0.25rem;
+    }
+
+    .footer-behavior-detail strong {
+      color: color-mix(in srgb, var(--text) 88%, var(--muted));
+      font-weight: 600;
+    }
+
+    .composer {
+      flex-shrink: 0;
+      padding: 0.65rem 0.75rem 1rem;
+      background: linear-gradient(to top, var(--bg) 88%, transparent);
+      border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+      box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.12);
+    }
+
+    @media (prefers-color-scheme: light) {
+      .composer {
+        box-shadow: 0 -8px 24px rgba(15, 20, 25, 0.06);
+      }
+    }
+
+    .composer-panel {
+      max-width: 780px;
+      margin: 0 auto;
+      display: flex;
+      gap: 0.55rem;
+      align-items: flex-end;
+      padding: 0.5rem 0.6rem;
+      border-radius: var(--radius-lg);
+      background: var(--card);
+      border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .composer textarea {
+      flex: 1;
+      min-height: 2.75rem;
+      max-height: 8rem;
+      resize: vertical;
+      padding: 0.65rem 0.8rem;
+      border-radius: var(--radius-md);
+      border: 1px solid color-mix(in srgb, var(--text) 12%, transparent);
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .composer textarea:focus {
+      outline: none;
+      border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+    }
+
+    .composer textarea:focus-visible {
+      outline: none;
+    }
+
+    .composer button.send {
+      padding: 0.65rem 1.15rem;
+      border-radius: var(--radius-md);
+      border: none;
+      background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 85%, #000));
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: filter 0.15s, transform 0.05s;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .composer button.send:hover:not(:disabled) {
+      filter: brightness(1.06);
+    }
+
+    .composer button.send:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    .composer button.send:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .composer button.send:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      filter: grayscale(0.2);
+    }
+  </style>
+</head>
+<body>
+  <div class="page-wrap">
+    <div class="app-card">
+      <header class="app-header">
+        <div class="brand">
+          <div class="brand-icon" aria-hidden="true">
+            <span class="food-emoji" title="Cooking assistant">🍳</span>
+          </div>
+          <div class="brand-text">
+            <h1>Recipe chatbot</h1>
+          </div>
+        </div>
+        <button type="button" class="btn-secondary" id="newChat">New conversation</button>
+      </header>
+
+      <main class="chat-main">
+        <div id="log" role="log" aria-live="polite" aria-relevant="additions"></div>
+      </main>
+
+      <div class="card-footer" aria-label="Model and agent behavior">
+        <div class="footer-inner">
+          <div class="footer-pills">
+            <span class="pill" title="LLM model"><strong>Model</strong> · {{ default_model }}</span>
+            <span class="pill behavior-path" title="Evaluator behavior file (project-relative)"><strong>Behavior file</strong> · {{ behavior_file_rel }}</span>
+          </div>
+          <p class="footer-behavior-detail"><strong>Behavior in use</strong> — {{ behavior_preview }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="composer">
+    <div class="composer-panel">
+      <textarea id="input" rows="1" placeholder="Ask about a recipe, technique, or meal plan…" autocomplete="off" aria-label="Message"></textarea>
+      <button type="button" class="send" id="send">Send</button>
+    </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "recipe_chatbot_session_id";
+    const logEl = document.getElementById("log");
+    const inputEl = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const newChatBtn = document.getElementById("newChat");
+
+    function timeLabel() {
+      return new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    }
+
+    function scrollLogToBottom() {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          logEl.scrollTop = logEl.scrollHeight;
+          const last = logEl.lastElementChild;
+          if (last) {
+            last.scrollIntoView({ block: "end", behavior: "smooth" });
+          }
+        });
+      });
+    }
+
+    function getSessionId() {
+      let id = sessionStorage.getItem(STORAGE_KEY);
+      if (!id) {
+        id = crypto.randomUUID();
+        sessionStorage.setItem(STORAGE_KEY, id);
+      }
+      return id;
+    }
+
+    function resetSession() {
+      sessionStorage.removeItem(STORAGE_KEY);
+      logEl.innerHTML = "";
+      getSessionId();
+    }
+
+    function appendBubble(role, text, isError) {
+      const row = document.createElement("div");
+      row.className = "msg-row " + (isError ? "error" : role);
+
+      const avatar = document.createElement("div");
+      avatar.className = "msg-avatar";
+      avatar.setAttribute("aria-hidden", "true");
+      if (isError) avatar.textContent = "!";
+      else if (role === "user") avatar.textContent = "You";
+      else avatar.textContent = "AI";
+
+      const stack = document.createElement("div");
+      stack.className = "msg-stack";
+
+      const meta = document.createElement("div");
+      meta.className = "msg-meta";
+      const label = document.createElement("span");
+      label.className = "role-label";
+      label.textContent = isError ? "Error" : role === "user" ? "You" : "Assistant";
+      const timeEl = document.createElement("time");
+      timeEl.dateTime = new Date().toISOString();
+      timeEl.textContent = timeLabel();
+      meta.appendChild(label);
+      meta.appendChild(timeEl);
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = text;
+
+      stack.appendChild(meta);
+      stack.appendChild(bubble);
+      row.appendChild(avatar);
+      row.appendChild(stack);
+      logEl.appendChild(row);
+      scrollLogToBottom();
+    }
+
+    async function sendMessage() {
+      const text = inputEl.value.trim();
+      if (!text) return;
+      inputEl.value = "";
+      appendBubble("user", text);
+      sendBtn.disabled = true;
+      const sessionId = getSessionId();
+      const payload = { session_id: sessionId, message: text };
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Session-Id": sessionId,
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const detail = data.detail;
+          const msg =
+            typeof detail === "string"
+              ? detail
+              : Array.isArray(detail)
+                ? detail.map((d) => d.msg || JSON.stringify(d)).join("; ")
+                : JSON.stringify(data);
+          appendBubble("assistant", msg || res.statusText, true);
+          return;
+        }
+        if (data.session_id) sessionStorage.setItem(STORAGE_KEY, data.session_id);
+        appendBubble("assistant", data.reply || "");
+      } catch (e) {
+        appendBubble("assistant", String(e), true);
+      } finally {
+        sendBtn.disabled = false;
+        inputEl.focus();
+      }
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    newChatBtn.addEventListener("click", resetSession);
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+    getSessionId();
+  </script>
+</body>
+</html>
